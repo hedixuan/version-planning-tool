@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://version-plan.local/schema/roadmap.schema.json",
+  "title": "通用版本计划",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "releases", "requirements"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "description": { "type": "string" }
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "releases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "status"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "name": { "$ref": "#/$defs/nonEmptyString" },
+          "goal": { "type": "string" },
+          "status": { "$ref": "#/$defs/status" },
+          "phases": { "$ref": "#/$defs/stringList" },
+          "exitCriteria": { "$ref": "#/$defs/stringList" }
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "releaseId", "status", "dependsOn", "acceptance", "evidence"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "$ref": "#/$defs/nonEmptyString" },
+          "releaseId": { "$ref": "#/$defs/id" },
+          "status": { "$ref": "#/$defs/status" },
+          "phase": { "$ref": "#/$defs/nonEmptyString" },
+          "type": { "$ref": "#/$defs/nonEmptyString" },
+          "priority": { "$ref": "#/$defs/nonEmptyString" },
+          "owner": { "type": ["string", "null"] },
+          "dependsOn": { "$ref": "#/$defs/idList" },
+          "acceptance": { "$ref": "#/$defs/stringList" },
+          "evidence": { "$ref": "#/$defs/stringList" },
+          "sourcePath": { "type": "string" },
+          "tags": { "$ref": "#/$defs/stringList" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "status": {
+      "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done", "cancelled"]
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "idList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/id" },
+      "uniqueItems": true
+    }
+  }
+}

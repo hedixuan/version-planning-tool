@@ -1,0 +1,67 @@
+{
+  "name": "version-planning-tool",
+  "version": "1.0.0",
+  "description": "通用、只读的版本计划校验与可视化工具",
+  "type": "module",
+  "main": "./dist/validation.js",
+  "types": "./dist/validation.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/validation.d.ts",
+      "import": "./dist/validation.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
+    "./schema": "./schema/roadmap.schema.json"
+  },
+  "bin": {
+    "version-plan": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.17"
+  },
+  "packageManager": "pnpm@10.18.3",
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.node.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.3.4",
+    "@fastify/static": "^8.3.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "antd": "^5.27.5",
+    "fastify": "^5.6.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "vite": "^7.1.9"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/node": "^24.7.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "eslint": "^9.37.0",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.4.0",
+    "jsdom": "^30.1.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.1",
+    "vitest": "^3.2.4"
+  }
+}

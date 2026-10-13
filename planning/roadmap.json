@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "version-planning-tool",
+    "name": "Version Planning Tool",
+    "description": "通用、只读、可独立迁移的版本计划校验与可视化工具。"
+  },
+  "updatedAt": "2026-10-12T09:05:00.000Z",
+  "releases": [
+    {
+      "id": "v1.0",
+      "name": "独立工具首版",
+      "goal": "交付通用 CLI、校验服务和可视化看板。",
+      "status": "done",
+      "exitCriteria": [
+        "独立工程质量门禁和消费项目接入验收全部通过。"
+      ]
+    },
+    {
+      "id": "v1.1",
+      "name": "专业只读工作台",
+      "goal": "将看板升级为 Linear / Plane 风格的专业只读任务工作台。",
+      "status": "done",
+      "exitCriteria": [
+        "四个主视图、组合筛选、详情导航和桌面/移动验收全部通过。"
+      ]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "tool-bootstrap",
+      "title": "建立独立 Node.js 与 TypeScript 工程",
+      "releaseId": "v1.0",
+      "status": "done",
+      "priority": "high",
+      "owner": "Agent",
+      "dependsOn": [],
+      "acceptance": [
+        "项目拥有独立 Git、依赖、锁文件和构建配置。"
+      ],
+      "evidence": [
+        "package.json",
+        "pnpm-lock.yaml"
+      ],
+      "tags": ["foundation"]
+    },
+    {
+      "id": "tool-service",
+      "title": "实现通用校验、CLI 与只读服务",
+      "releaseId": "v1.0",
+      "status": "done",
+      "priority": "high",
+      "owner": "Agent",
+      "dependsOn": ["tool-bootstrap"],
+      "acceptance": [
+        "CLI 可以安全加载、校验并服务任意已配置项目。"
+      ],
+      "evidence": [
+        "src/validation.ts",
+        "src/server.ts",
+        "src/cli.ts"
+      ],
+      "tags": ["server", "cli"]
+    },
+    {
+      "id": "tool-board",
+      "title": "实现 React 可视化看板",
+      "releaseId": "v1.0",
+      "status": "done",
+      "priority": "high",
+      "owner": "Agent",
+      "dependsOn": ["tool-service"],
+      "acceptance": [
+        "总览、版本、状态、筛选和详情使用消费项目真实数据。"
+      ],
+      "evidence": [
+        "src/web/App.tsx",
+        "src/web/styles.css"
+      ],
+      "tags": ["web"]
+    },
+    {
+      "id": "tool-documentation",
+      "title": "完成独立项目文档与消费边界",
+      "releaseId": "v1.0",
+      "status": "done",
+      "priority": "medium",
+      "owner": "Agent",
+      "dependsOn": ["tool-board"],
+      "acceptance": [
+        "README 和消费方规则明确独立项目职责。"
+      ],
+      "evidence": [
+        "README.md"
+      ],
+      "tags": ["documentation"]
+    },
+    {
+      "id": "tool-verification",
+      "title": "执行工程、安全与浏览器验收",
+      "releaseId": "v1.0",
+      "status": "done",
+      "priority": "high",
+      "owner": "Agent",
+      "dependsOn": ["tool-documentation"],
+      "acceptance": [
+        "类型、Lint、测试、构建、HTTP 安全和浏览器验收通过。"
+      ],
+      "evidence": [
+        "tests/version-plan.test.ts",
+        "tests/fixtures/invalid-project/roadmap.json"
+      ],
+      "tags": ["quality"]
+    },
+    {
+      "id": "board-professional",
+      "title": "升级专业只读任务看板",
+      "releaseId": "v1.1",
+      "status": "done",
+      "priority": "high",
+      "owner": "Agent",
+      "dependsOn": ["tool-verification"],
+      "acceptance": [
+        "概览、列表、看板、版本路线与任务详情使用真实数据且保持只读。",
+        "组合筛选、排序、依赖导航和键盘操作可用。",
+        "工程门禁与桌面/移动浏览器验收通过。"
+      ],
+      "evidence": [
+        "src/web/App.tsx",
+        "src/web/lib/view-model.ts",
+        "tests/view-model.test.ts",
+        "tests/board-ui.test.tsx"
+      ],
+      "tags": ["web", "ux"]
+    }
+  ]
+}
