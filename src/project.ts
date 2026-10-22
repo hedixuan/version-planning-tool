@@ -23,6 +23,7 @@ async function parseJson(file: string): Promise<unknown> {
 export async function resolveProjectFile(
   projectRoot: string,
   relativeFile: string,
+  options: { allowMissing?: boolean } = {},
 ): Promise<string> {
   if (
     !relativeFile ||
@@ -43,7 +44,17 @@ export async function resolveProjectFile(
   let actual: string;
   try {
     actual = await realpath(candidate);
-  } catch {
+  } catch (error) {
+    // 账本文件允许"配置了但尚未创建"：缺失时返回候选路径，由调用方报 USAGE_FILE_INVALID。
+    if (options.allowMissing && isMissingPathError(error)) {
+      // 仍须确认最深的存在祖先目录没有经符号链接越出项目目录。
+      const nearest = await realpathNearestExisting(candidate);
+      const nearestRelative = path.relative(root, nearest);
+      if (nearestRelative.startsWith("..") || path.isAbsolute(nearestRelative)) {
+        throw new ProjectConfigError(`符号链接越出项目目录：${relativeFile}`);
+      }
+      return candidate;
+    }
     throw new ProjectConfigError(`配置文件指向的路径不存在：${relativeFile}`);
   }
   const actualRelative = path.relative(root, actual);
@@ -53,11 +64,31 @@ export async function resolveProjectFile(
   return actual;
 }
 
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+async function realpathNearestExisting(target: string): Promise<string> {
+  let current = target;
+  for (;;) {
+    try {
+      return await realpath(current);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      current = parent;
+    }
+  }
+}
+
 export async function loadProjectConfig(projectRoot: string): Promise<{
   root: string;
   config: VersionPlanConfig;
   dataPath: string;
   schemaPath?: string;
+  usagePath?: string;
 }> {
   const root = await realpath(projectRoot);
   const raw = await parseJson(path.join(root, CONFIG_NAME));
@@ -71,12 +102,20 @@ export async function loadProjectConfig(projectRoot: string): Promise<{
   }
 
   const keys = Object.keys(raw);
-  if (keys.some((key) => key !== "dataFile" && key !== "schemaFile")) {
+  if (
+    keys.some(
+      (key) => key !== "dataFile" && key !== "schemaFile" && key !== "usageFile",
+    )
+  ) {
     throw new ProjectConfigError("version-plan.config.json 包含未知字段");
   }
   const schemaFile = (raw as Record<string, unknown>).schemaFile;
   if (schemaFile !== undefined && typeof schemaFile !== "string") {
     throw new ProjectConfigError("schemaFile 必须是字符串");
+  }
+  const usageFile = (raw as Record<string, unknown>).usageFile;
+  if (usageFile !== undefined && typeof usageFile !== "string") {
+    throw new ProjectConfigError("usageFile 必须是字符串");
   }
 
   const config = raw as VersionPlanConfig;
@@ -86,6 +125,10 @@ export async function loadProjectConfig(projectRoot: string): Promise<{
     dataPath: await resolveProjectFile(root, config.dataFile),
     schemaPath: config.schemaFile
       ? await resolveProjectFile(root, config.schemaFile)
+      : undefined,
+    // 账本文件允许配置后缺失：缺失由校验层报 USAGE_FILE_INVALID 而非 CONFIG_INVALID。
+    usagePath: config.usageFile
+      ? await resolveProjectFile(root, config.usageFile, { allowMissing: true })
       : undefined,
   };
 }

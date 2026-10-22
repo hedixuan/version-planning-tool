@@ -1,31 +1,40 @@
 import {
+  ApiOutlined,
   BranchesOutlined,
   CheckSquareOutlined,
   FileTextOutlined,
   LinkOutlined,
 } from "@ant-design/icons";
 import { Alert, Descriptions, Drawer, List, Space, Tag, Typography } from "antd";
-import type { ReactNode } from "react";
-import type { Requirement, Roadmap } from "../../types";
+import { useMemo, type ReactNode } from "react";
+import type { Requirement, Roadmap, UsageApiPayload } from "../../types";
 import { priorityLabel } from "../lib/meta";
+import { createUsageContext } from "../lib/usage-view-model";
 import { StatusTag } from "./TaskPrimitives";
+import { TaskUsageDetail } from "./UsageView";
 
 const { Text, Title } = Typography;
 
 export function TaskDetailDrawer({
   roadmap,
   requirement,
+  usage,
   onClose,
   onNavigate,
 }: {
   roadmap: Roadmap;
   requirement?: Requirement;
+  usage?: UsageApiPayload | null;
   onClose: () => void;
   onNavigate: (id: string) => void;
 }) {
   const release = requirement
     ? roadmap.releases.find((item) => item.id === requirement.releaseId)
     : undefined;
+  const usageContext = useMemo(
+    () => (usage && requirement ? createUsageContext(roadmap, usage) : undefined),
+    [roadmap, usage, requirement],
+  );
   return (
     <Drawer
       className="detail-drawer"
@@ -102,6 +111,12 @@ export function TaskDetailDrawer({
               <Descriptions.Item label="更新时间">{formatDate(requirement.updatedAt)}</Descriptions.Item>
             </Descriptions>
           </DetailSection>
+
+          {usageContext && (
+            <DetailSection title="模型用量" icon={<ApiOutlined />}>
+              <TaskUsageDetail context={usageContext} taskId={requirement.id} />
+            </DetailSection>
+          )}
         </Space>
       )}
     </Drawer>
