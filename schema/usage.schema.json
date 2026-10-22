@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://version-plan.local/schema/usage.schema.json",
+  "title": "模型用量账本",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "events"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "project": { "$ref": "#/$defs/id" },
+    "prices": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/price" }
+    },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/event" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "dateTime": { "type": "string", "format": "date-time" },
+    "tokenCount": { "type": "integer", "minimum": 0 },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "role": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "usageSource": {
+      "enum": ["provider", "runtime_log", "manual", "estimate"]
+    },
+    "confidence": {
+      "enum": ["measured", "estimated", "unknown"]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "taskId",
+        "occurredAt",
+        "provider",
+        "modelId",
+        "role",
+        "source",
+        "confidence",
+        "usage"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "taskId": { "$ref": "#/$defs/id" },
+        "occurredAt": { "$ref": "#/$defs/dateTime" },
+        "provider": { "$ref": "#/$defs/id" },
+        "modelId": { "$ref": "#/$defs/id" },
+        "agent": { "type": ["string", "null"], "maxLength": 200 },
+        "role": { "$ref": "#/$defs/role" },
+        "source": { "$ref": "#/$defs/usageSource" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputTokens", "outputTokens"],
+          "properties": {
+            "inputTokens": { "$ref": "#/$defs/tokenCount" },
+            "outputTokens": { "$ref": "#/$defs/tokenCount" },
+            "cachedInputTokens": { "$ref": "#/$defs/tokenCount" },
+            "reasoningTokens": { "$ref": "#/$defs/tokenCount" }
+          }
+        },
+        "priceId": { "$ref": "#/$defs/id" },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["basis", "currency"],
+          "properties": {
+            "basis": { "enum": ["actual", "estimated"] },
+            "currency": { "$ref": "#/$defs/currency" },
+            "amount": { "type": "number", "minimum": 0 },
+            "priceId": { "$ref": "#/$defs/id" },
+            "note": { "type": "string", "maxLength": 500 },
+            "assumptions": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+            }
+          }
+        },
+        "note": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "price": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "provider",
+        "modelId",
+        "currency",
+        "unitTokens",
+        "inputPricePerUnit",
+        "outputPricePerUnit",
+        "effectiveFrom",
+        "basis"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "provider": { "$ref": "#/$defs/id" },
+        "modelId": { "$ref": "#/$defs/id" },
+        "currency": { "$ref": "#/$defs/currency" },
+        "unitTokens": { "type": "integer", "minimum": 1 },
+        "inputPricePerUnit": { "type": "number", "minimum": 0 },
+        "cachedInputPricePerUnit": { "type": "number", "minimum": 0 },
+        "outputPricePerUnit": { "type": "number", "minimum": 0 },
+        "reasoningPricePerUnit": { "type": "number", "minimum": 0 },
+        "effectiveFrom": { "$ref": "#/$defs/dateTime" },
+        "effectiveTo": { "type": ["string", "null"], "format": "date-time" },
+        "basis": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "note": { "type": "string", "maxLength": 500 }
+      }
+    }
+  }
+}
