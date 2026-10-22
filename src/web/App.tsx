@@ -2,7 +2,7 @@ import { Alert, App as AntApp, Button, Skeleton } from "antd";
 import { useEffect, useState } from "react";
 import type { Roadmap } from "../types";
 import { Workspace } from "./components/Workspace";
-import { loadRoadmap } from "./lib/api";
+import { loadRoadmap, type RoadmapPayload } from "./lib/api";
 
 function readSessionToken(): string | null {
   return new URLSearchParams(window.location.search).get("token");
@@ -10,7 +10,7 @@ function readSessionToken(): string | null {
 
 export function App() {
   const token = readSessionToken();
-  const [roadmap, setRoadmap] = useState<Roadmap>();
+  const [payload, setPayload] = useState<RoadmapPayload>();
   const [error, setError] = useState<string | undefined>(
     token ? undefined : "缺少会话令牌，请使用 CLI 输出的完整地址重新打开看板",
   );
@@ -24,12 +24,12 @@ export function App() {
     void loadRoadmap(sessionToken)
       .then((data) => {
         if (cancelled) return;
-        setRoadmap(data);
+        setPayload(data);
         setError(undefined);
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        setRoadmap(undefined);
+        setPayload(undefined);
         setError(reason instanceof Error ? reason.message : "无法读取版本计划");
       })
       .finally(() => {
@@ -39,6 +39,8 @@ export function App() {
       cancelled = true;
     };
   }, [requestId]);
+
+  const roadmap: Roadmap | undefined = payload?.roadmap;
 
   if (loading) {
     return (
@@ -76,7 +78,7 @@ export function App() {
 
   return (
     <AntApp>
-      <Workspace roadmap={roadmap} />
+      <Workspace roadmap={roadmap} usage={payload?.usage ?? null} />
     </AntApp>
   );
 }

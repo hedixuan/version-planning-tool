@@ -1,6 +1,6 @@
 import type { InputRef } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Roadmap } from "../../types";
+import type { Roadmap, UsageApiPayload } from "../../types";
 import {
   EMPTY_FILTERS,
   calculateReleaseProgress,
@@ -14,8 +14,15 @@ import { AppShell, type ViewName } from "./AppShell";
 import { FilterBar } from "./FilterBar";
 import { TaskDetailDrawer } from "./TaskDetailDrawer";
 import { KanbanView, OverviewView, ReleasesView, TaskListView } from "./Views";
+import { UsageView } from "./UsageView";
 
-export function Workspace({ roadmap }: { roadmap: Roadmap }) {
+export function Workspace({
+  roadmap,
+  usage = null,
+}: {
+  roadmap: Roadmap;
+  usage?: UsageApiPayload | null;
+}) {
   const [view, setView] = useState<ViewName>("overview");
   const [filters, setFilters] = useState<Filters>({ ...EMPTY_FILTERS });
   const [sort, setSort] = useState<SortKey>("updatedAt");
@@ -36,6 +43,8 @@ export function Workspace({ roadmap }: { roadmap: Roadmap }) {
       })),
     [roadmap.releases, roadmap.requirements],
   );
+  // 账本未启用时不展示模型用量视图，避免虚构统计
+  const effectiveView: ViewName = view === "usage" && !usage ? "overview" : view;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -52,17 +61,18 @@ export function Workspace({ roadmap }: { roadmap: Roadmap }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedId]);
 
-  const viewProps = { roadmap, items, onOpen: (item: { id: string }) => setSelectedId(item.id) };
+  const viewProps = { roadmap, items, usage, onOpen: (item: { id: string }) => setSelectedId(item.id) };
   return (
     <AppShell
       projectName={roadmap.project.name}
       description={roadmap.project.description}
       updatedAt={roadmap.updatedAt}
-      view={view}
+      view={effectiveView}
       onViewChange={setView}
       blocked={stats.blocked}
       review={stats.review}
       releases={releaseProgress}
+      usageEnabled={Boolean(usage)}
     >
       <FilterBar
         roadmap={roadmap}
@@ -74,14 +84,18 @@ export function Workspace({ roadmap }: { roadmap: Roadmap }) {
         onSortChange={setSort}
       />
       <main className="view-content">
-        {view === "overview" && <OverviewView {...viewProps} />}
-        {view === "list" && <TaskListView {...viewProps} />}
-        {view === "board" && <KanbanView {...viewProps} />}
-        {view === "releases" && <ReleasesView {...viewProps} />}
+        {effectiveView === "overview" && <OverviewView {...viewProps} />}
+        {effectiveView === "list" && <TaskListView {...viewProps} />}
+        {effectiveView === "board" && <KanbanView {...viewProps} />}
+        {effectiveView === "releases" && <ReleasesView {...viewProps} />}
+        {effectiveView === "usage" && usage && (
+          <UsageView roadmap={roadmap} items={items} usage={usage} onOpen={viewProps.onOpen} />
+        )}
       </main>
       <TaskDetailDrawer
         roadmap={roadmap}
         requirement={selected}
+        usage={usage}
         onClose={() => setSelectedId(undefined)}
         onNavigate={setSelectedId}
       />

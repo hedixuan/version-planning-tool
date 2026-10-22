@@ -5,7 +5,8 @@ import {
   EyeOutlined,
 } from "@ant-design/icons";
 import { Card, Empty, Progress, Tag, Typography } from "antd";
-import type { Release, Requirement, Roadmap } from "../../types";
+import { useMemo } from "react";
+import type { Release, Requirement, Roadmap, UsageApiPayload } from "../../types";
 import { STATUSES } from "../../types";
 import { openOnKeyboard } from "../lib/keyboard";
 import { STATUS_META } from "../lib/meta";
@@ -13,14 +14,18 @@ import {
   calculateReleaseProgress,
   calculateStats,
 } from "../lib/view-model";
+import { createUsageContext } from "../lib/usage-view-model";
 import { OverlayScroll } from "./OverlayScroll";
 import { PriorityTag, StatusTag, TaskCard } from "./TaskPrimitives";
+import { TaskUsageCell } from "./UsageView";
 
 const { Paragraph, Text, Title } = Typography;
 
 interface ViewProps {
   roadmap: Roadmap;
   items: Requirement[];
+  /** 配置了 usageFile 时的只读账本载荷；未启用为 null/undefined */
+  usage?: UsageApiPayload | null;
   onOpen: (item: Requirement) => void;
 }
 
@@ -96,7 +101,11 @@ export function OverviewView({ roadmap, items, onOpen }: ViewProps) {
   );
 }
 
-export function TaskListView({ roadmap, items, onOpen }: ViewProps) {
+export function TaskListView({ roadmap, items, usage, onOpen }: ViewProps) {
+  const usageContext = useMemo(
+    () => (usage ? createUsageContext(roadmap, usage) : undefined),
+    [roadmap, usage],
+  );
   if (!items.length) return <ViewEmpty />;
   return (
     <div data-testid="view-list">
@@ -104,7 +113,7 @@ export function TaskListView({ roadmap, items, onOpen }: ViewProps) {
       <div className="task-table" role="list">
         <div className="task-row task-row-header">
           <span>任务</span><span>状态</span><span>优先级</span><span>负责人</span>
-          <span>版本</span><span>标签 / 依赖</span>
+          <span>版本</span><span>标签 / 依赖</span><span>模型用量</span>
         </div>
         {items.map((item) => (
           <div
@@ -124,6 +133,9 @@ export function TaskListView({ roadmap, items, onOpen }: ViewProps) {
             <span className="task-row-tags">
               {(item.tags ?? []).slice(0, 2).map((tag) => <Tag key={tag}>{tag}</Tag>)}
               {item.dependsOn.length > 0 && <Text type="secondary">{item.dependsOn.length} 依赖</Text>}
+            </span>
+            <span className="task-usage">
+              {usageContext ? <TaskUsageCell context={usageContext} taskId={item.id} /> : "—"}
             </span>
           </div>
         ))}

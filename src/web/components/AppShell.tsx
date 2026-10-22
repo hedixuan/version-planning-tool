@@ -1,4 +1,5 @@
 import {
+  ApiOutlined,
   AppstoreOutlined,
   BarsOutlined,
   MenuFoldOutlined,
@@ -12,7 +13,7 @@ import { useState, type ReactNode } from "react";
 const { Sider, Header, Content } = Layout;
 const { Text, Title } = Typography;
 
-export type ViewName = "overview" | "list" | "board" | "releases";
+export type ViewName = "overview" | "list" | "board" | "releases" | "usage";
 
 const navigation = [
   { key: "overview", icon: <RadarChartOutlined />, label: "概览" },
@@ -20,6 +21,8 @@ const navigation = [
   { key: "board", icon: <AppstoreOutlined />, label: "状态看板" },
   { key: "releases", icon: <ProjectOutlined />, label: "版本路线" },
 ];
+
+const usageNavigation = { key: "usage", icon: <ApiOutlined />, label: "模型用量" };
 
 export interface SidebarRelease {
   id: string;
@@ -36,6 +39,7 @@ export function AppShell({
   blocked,
   review,
   releases,
+  usageEnabled = false,
   children,
 }: {
   projectName: string;
@@ -46,9 +50,12 @@ export function AppShell({
   blocked: number;
   review: number;
   releases: SidebarRelease[];
+  /** 配置了 usageFile 时才显示模型用量入口；未启用时不出现该视图 */
+  usageEnabled?: boolean;
   children: ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const navigationItems = usageEnabled ? [...navigation, usageNavigation] : navigation;
   return (
     <Layout className="app-shell">
       <Sider
@@ -71,7 +78,7 @@ export function AppShell({
         <Menu
           mode="inline"
           selectedKeys={[view]}
-          items={navigation}
+          items={navigationItems}
           onClick={({ key }) => onViewChange(key as ViewName)}
         />
         <aside className="sidebar-stats" aria-label="关注事项">
