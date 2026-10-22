@@ -114,6 +114,72 @@ describe("估算公式与回退假设（T04 / T14）", () => {
     expect(estimateEventCost(evt, PRICES[2]!).assumptions).toEqual([]);
   });
 
+  // §3.3 回退假设记录规则（2026-10-22 项目负责人批准）：反例——分段为零不标记
+  it("分段 Token 为零时不触发回退、不记录假设", () => {
+    const evt = normalizeLedger({
+      schemaVersion: 1,
+      prices: [],
+      events: [
+        event("evt-zero-segment", "T3", {
+          provider: "alpha",
+          modelId: "model-fallback",
+          usage: { inputTokens: 900, outputTokens: 400 },
+        }),
+      ],
+    }).events[0]!;
+    // 900/1e6*2 + 400/1e6*8 = 0.005；无缓存/推理分段，分段费用为零，与回退无关
+    expect(estimateEventCost(evt, PRICES[3]!)).toEqual({
+      currency: "CNY",
+      amount: 0.005,
+      assumptions: [],
+    });
+  });
+
+  // §3.3：金额公式不因假设标记规则变化——缺字段回退价与等价显式价金额一致
+  it("回退价与等价显式单价金额一致，标记规则不改变费用公式", () => {
+    const evt = normalized.events.find((item) => item.id === "evt-005")!;
+    const explicitEquivalent = {
+      ...PRICES[3]!,
+      id: "p-fallback-explicit",
+      cachedInputPricePerUnit: 2,
+      reasoningPricePerUnit: 8,
+    };
+    const withFallback = estimateEventCost(evt, PRICES[3]!);
+    const withExplicit = estimateEventCost(evt, explicitEquivalent);
+    expect(withFallback.amount).toBe(withExplicit.amount);
+    expect(withFallback.amount).toBe(0.036);
+    expect(withFallback.assumptions).toEqual([
+      USAGE_ASSUMPTION_IDS.cachedInputFallbackToInput,
+      USAGE_ASSUMPTION_IDS.reasoningFallbackToOutput,
+    ]);
+    expect(withExplicit.assumptions).toEqual([]);
+  });
+
+  // §3.3：事件已登记 cost 时不执行自动估算，不产生回退假设
+  it("已登记 cost 的事件不执行自动估算、不产生回退假设", () => {
+    const evt = normalizeLedger({
+      schemaVersion: 1,
+      prices: PRICES,
+      events: [
+        event("evt-cost-no-estimate", "T3", {
+          provider: "alpha",
+          modelId: "model-fallback",
+          usage: {
+            inputTokens: 10000,
+            outputTokens: 2000,
+            cachedInputTokens: 4000,
+            reasoningTokens: 1000,
+          },
+          cost: { basis: "actual", currency: "CNY", amount: 0.5, note: "供应商账单" },
+        }),
+      ],
+    }).events[0]!;
+    const cost = resolveEventCost(evt, PRICES);
+    expect(cost.state).toBe("actual");
+    expect(cost.amount).toBe(0.5);
+    expect(cost.assumptions).toEqual([]);
+  });
+
   it("单位 token 数参与换算（unitTokens=1000）", () => {
     const evt = normalized.events.find((item) => item.id === "evt-003")!;
     // 900/1000*0.01 + 400/1000*0.03 = 0.021
