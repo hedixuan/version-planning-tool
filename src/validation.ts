@@ -11,17 +11,25 @@ import {
   type Roadmap,
   type RoadmapView,
   type Status,
+  type UsageApiPayload,
+  type UsageEvent,
+  type UsageLedger,
+  type UsagePrice,
   type ValidationResult,
 } from "./types.js";
+import { buildUsageSummary, priceWindowCovers } from "./usage.js";
 
 const baseSchemaPath = fileURLToPath(
   new URL("../schema/roadmap.schema.json", import.meta.url),
+);
+const usageSchemaPath = fileURLToPath(
+  new URL("../schema/usage.schema.json", import.meta.url),
 );
 const addFormats = createRequire(import.meta.url)("ajv-formats") as FormatsPlugin;
 
 function schemaDiagnostics(
   errors: ErrorObject[] | null | undefined,
-  code: "SCHEMA_INVALID" | "EXTENSION_SCHEMA_INVALID",
+  code: "SCHEMA_INVALID" | "EXTENSION_SCHEMA_INVALID" | "USAGE_SCHEMA_INVALID",
 ): Diagnostic[] {
   return (errors ?? []).map((error) => ({
     code,
@@ -141,6 +149,228 @@ export function validateSemantics(roadmap: Roadmap): Diagnostic[] {
   return diagnostics;
 }
 
+function duplicateIdDiagnostics(
+  items: { id: string }[],
+  code: "USAGE_DUPLICATE_EVENT_ID" | "USAGE_DUPLICATE_PRICE_ID",
+  basePath: string,
+): Diagnostic[] {
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  for (const item of items) {
+    if (seen.has(item.id) && !duplicates.includes(item.id)) duplicates.push(item.id);
+    seen.add(item.id);
+  }
+  return duplicates.map((id) => ({
+    code,
+    path: `${basePath}/${id}`,
+    message: `ID 重复：${id}`,
+  }));
+}
+
+function priceWindowDiagnostics(prices: UsagePrice[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  for (const price of prices) {
+    if (
+      price.effectiveTo !== undefined &&
+      price.effectiveTo !== null &&
+      Date.parse(price.effectiveTo) <= Date.parse(price.effectiveFrom)
+    ) {
+      diagnostics.push({
+        code: "USAGE_INVALID_PRICE_WINDOW",
+        path: `/prices/${price.id}`,
+        message: `价格 ${price.id} 的 effectiveTo 早于等于 effectiveFrom`,
+      });
+    }
+  }
+
+  // 同一 (provider, modelId) 的有效期不得重叠（半开区间，相邻不构成重叠）
+  const groups = new Map<string, UsagePrice[]>();
+  for (const price of prices) {
+    const key = `${price.provider}\u0000${price.modelId}`;
+    const group = groups.get(key) ?? [];
+    group.push(price);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    const sorted = [...group].sort(
+      (left, right) => Date.parse(left.effectiveFrom) - Date.parse(right.effectiveFrom),
+    );
+    let furthest: UsagePrice | undefined;
+    let furthestEnd = Number.NEGATIVE_INFINITY;
+    for (const price of sorted) {
+      const start = Date.parse(price.effectiveFrom);
+      const end =
+        price.effectiveTo === undefined || price.effectiveTo === null
+          ? Number.POSITIVE_INFINITY
+          : Date.parse(price.effectiveTo);
+      if (furthest && start < furthestEnd) {
+        diagnostics.push({
+          code: "USAGE_OVERLAPPING_PRICE",
+          path: `/prices/${price.id}`,
+          message: `价格 ${price.id} 与 ${furthest.id} 的有效期重叠（同一 provider/modelId 不得重叠）`,
+        });
+      }
+      if (end > furthestEnd) {
+        furthest = price;
+        furthestEnd = end;
+      }
+    }
+  }
+  return diagnostics;
+}
+
+function priceReferenceDiagnostics(
+  event: UsageEvent,
+  priceById: Map<string, UsagePrice>,
+): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const references: { priceId: string; path: string }[] = [];
+  if (event.priceId !== undefined) {
+    references.push({ priceId: event.priceId, path: `/events/${event.id}/priceId` });
+  }
+  if (event.cost?.priceId !== undefined && event.cost.priceId !== event.priceId) {
+    references.push({ priceId: event.cost.priceId, path: `/events/${event.id}/cost/priceId` });
+  }
+
+  for (const reference of references) {
+    const price = priceById.get(reference.priceId);
+    if (!price) {
+      diagnostics.push({
+        code: "USAGE_UNKNOWN_PRICE",
+        path: reference.path,
+        message: `事件 ${event.id} 引用不存在的价格 ${reference.priceId}`,
+      });
+      continue;
+    }
+    if (price.provider !== event.provider || price.modelId !== event.modelId) {
+      diagnostics.push({
+        code: "USAGE_PRICE_MODEL_MISMATCH",
+        path: reference.path,
+        message: `事件 ${event.id} 引用价格 ${price.id}，但其 (provider, modelId) 与事件的 (${event.provider}, ${event.modelId}) 不一致`,
+      });
+    }
+    if (!priceWindowCovers(price, event.occurredAt)) {
+      diagnostics.push({
+        code: "USAGE_PRICE_NOT_EFFECTIVE",
+        path: reference.path,
+        message: `事件 ${event.id} 的发生时间 ${event.occurredAt} 不在价格 ${price.id} 的有效期内`,
+      });
+    }
+  }
+
+  if (event.cost?.priceId !== undefined) {
+    const price = priceById.get(event.cost.priceId);
+    if (price && price.currency !== event.cost.currency) {
+      diagnostics.push({
+        code: "USAGE_CURRENCY_MISMATCH",
+        path: `/events/${event.id}/cost/currency`,
+        message: `事件 ${event.id} 的费用币种 ${event.cost.currency} 与价格 ${price.id} 的币种 ${price.currency} 不一致`,
+      });
+    }
+  }
+  return diagnostics;
+}
+
+/** 用量账本语义校验（契约 §7.2 全部 13 个诊断码） */
+export function validateUsageSemantics(ledger: UsageLedger, roadmap: Roadmap): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const events = ledger.events;
+  const prices = ledger.prices ?? [];
+
+  if (ledger.project !== undefined && ledger.project !== roadmap.project.id) {
+    diagnostics.push({
+      code: "USAGE_PROJECT_MISMATCH",
+      path: "/project",
+      message: `账本 project「${ledger.project}」与需求池 project.id「${roadmap.project.id}」不一致`,
+    });
+  }
+
+  diagnostics.push(...duplicateIdDiagnostics(events, "USAGE_DUPLICATE_EVENT_ID", "/events"));
+  diagnostics.push(...duplicateIdDiagnostics(prices, "USAGE_DUPLICATE_PRICE_ID", "/prices"));
+  diagnostics.push(...priceWindowDiagnostics(prices));
+
+  const taskIds = new Set(roadmap.requirements.map((item) => item.id));
+  const priceById = new Map(prices.map((price) => [price.id, price]));
+  for (const event of events) {
+    if (!taskIds.has(event.taskId)) {
+      diagnostics.push({
+        code: "USAGE_UNKNOWN_TASK",
+        path: `/events/${event.id}/taskId`,
+        message: `事件 ${event.id} 关联不存在的任务 ${event.taskId}`,
+      });
+    }
+
+    const cachedInputTokens = event.usage.cachedInputTokens ?? 0;
+    if (cachedInputTokens > event.usage.inputTokens) {
+      diagnostics.push({
+        code: "USAGE_TOKEN_SUBTOTAL_EXCEEDED",
+        path: `/events/${event.id}/usage/cachedInputTokens`,
+        message: `事件 ${event.id} 的 cachedInputTokens（${cachedInputTokens}）超过 inputTokens（${event.usage.inputTokens}）`,
+      });
+    }
+    const reasoningTokens = event.usage.reasoningTokens ?? 0;
+    if (reasoningTokens > event.usage.outputTokens) {
+      diagnostics.push({
+        code: "USAGE_TOKEN_SUBTOTAL_EXCEEDED",
+        path: `/events/${event.id}/usage/reasoningTokens`,
+        message: `事件 ${event.id} 的 reasoningTokens（${reasoningTokens}）超过 outputTokens（${event.usage.outputTokens}）`,
+      });
+    }
+
+    if (
+      event.priceId !== undefined &&
+      event.cost?.priceId !== undefined &&
+      event.priceId !== event.cost.priceId
+    ) {
+      diagnostics.push({
+        code: "USAGE_PRICE_REF_CONFLICT",
+        path: `/events/${event.id}/priceId`,
+        message: `事件 ${event.id} 同时引用价格 ${event.priceId}（估算快照）与 ${event.cost.priceId}（登记依据），两者不一致`,
+      });
+    }
+
+    diagnostics.push(...priceReferenceDiagnostics(event, priceById));
+  }
+  return diagnostics;
+}
+
+async function loadUsageLedger(
+  usagePath: string,
+  usageFile: string,
+  roadmap: Roadmap,
+): Promise<{ diagnostics: Diagnostic[]; payload?: UsageApiPayload }> {
+  let raw: unknown;
+  try {
+    raw = await readJsonFile(usagePath);
+  } catch {
+    return {
+      diagnostics: [
+        {
+          code: "USAGE_FILE_INVALID",
+          path: usageFile,
+          message: `用量账本文件缺失或不可解析：${usageFile}`,
+        },
+      ],
+    };
+  }
+
+  const usageSchema = JSON.parse(await readFile(usageSchemaPath, "utf8")) as object;
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  addFormats(ajv);
+  const validateUsage = ajv.compile(usageSchema);
+  if (!validateUsage(raw)) {
+    return { diagnostics: schemaDiagnostics(validateUsage.errors, "USAGE_SCHEMA_INVALID") };
+  }
+
+  const ledger = raw as UsageLedger;
+  const diagnostics = validateUsageSemantics(ledger, roadmap);
+  if (diagnostics.length > 0) return { diagnostics };
+
+  const releaseByTask = new Map(roadmap.requirements.map((item) => [item.id, item.releaseId]));
+  const summary = buildUsageSummary(ledger.events, ledger.prices ?? [], releaseByTask);
+  return { diagnostics: [], payload: { enabled: true, ledger, summary } };
+}
+
 export async function validateProject(projectRoot: string): Promise<ValidationResult> {
   try {
     const project = await loadProjectConfig(projectRoot);
@@ -153,6 +383,7 @@ export async function validateProject(projectRoot: string): Promise<ValidationRe
       return {
         valid: false,
         diagnostics: schemaDiagnostics(validateBase.errors, "SCHEMA_INVALID"),
+        usage: null,
       };
     }
 
@@ -166,18 +397,27 @@ export async function validateProject(projectRoot: string): Promise<ValidationRe
             validateExtension.errors,
             "EXTENSION_SCHEMA_INVALID",
           ),
+          usage: null,
         };
       }
     }
 
     const roadmap = data as Roadmap;
     const diagnostics = validateSemantics(roadmap);
-    return { valid: diagnostics.length === 0, data: roadmap, diagnostics };
+    let usage: UsageApiPayload | null = null;
+    const usageFile = project.config.usageFile;
+    if (project.usagePath && usageFile) {
+      const loaded = await loadUsageLedger(project.usagePath, usageFile, roadmap);
+      diagnostics.push(...loaded.diagnostics);
+      usage = loaded.payload ?? null;
+    }
+    return { valid: diagnostics.length === 0, data: roadmap, diagnostics, usage };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
       valid: false,
       diagnostics: [{ code: "CONFIG_INVALID", message }],
+      usage: null,
     };
   }
 }

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { serveProject } from "./server.js";
 import { validateProject } from "./validation.js";
@@ -38,6 +40,29 @@ function assertNodeVersion(): void {
   }
 }
 
+export interface ValidateCommandResult {
+  exitCode: number;
+  stdout: string[];
+  stderr: string[];
+}
+
+/** validate 命令的纯逻辑：成功退出码 0，失败退出码 1；输出格式与 CLI 既有行为一致 */
+export async function runValidate(project: string): Promise<ValidateCommandResult> {
+  const result = await validateProject(project);
+  if (result.valid) {
+    return {
+      exitCode: 0,
+      stdout: [`校验通过：${result.data?.requirements.length ?? 0} 个需求`],
+      stderr: [],
+    };
+  }
+  return {
+    exitCode: 1,
+    stdout: [],
+    stderr: result.diagnostics.map((diagnostic) => `[${diagnostic.code}] ${diagnostic.message}`),
+  };
+}
+
 async function main(): Promise<void> {
   assertNodeVersion();
   const { values, positionals } = parseArgs({
@@ -64,15 +89,10 @@ async function main(): Promise<void> {
   const project = resolve(values.project);
 
   if (command === "validate") {
-    const result = await validateProject(project);
-    if (result.valid) {
-      console.log(`校验通过：${result.data?.requirements.length ?? 0} 个需求`);
-      return;
-    }
-    for (const diagnostic of result.diagnostics) {
-      console.error(`[${diagnostic.code}] ${diagnostic.message}`);
-    }
-    process.exitCode = 1;
+    const outcome = await runValidate(project);
+    for (const line of outcome.stdout) console.log(line);
+    for (const line of outcome.stderr) console.error(line);
+    process.exitCode = outcome.exitCode;
     return;
   }
 
@@ -97,7 +117,20 @@ async function main(): Promise<void> {
   throw new Error(`未知命令：${command}\n${usage}`);
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+/** 仅当本文件作为入口直接执行（含经符号链接的全局 bin）时运行 main，便于测试导入 */
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
