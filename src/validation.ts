@@ -17,7 +17,7 @@ import {
   type UsagePrice,
   type ValidationResult,
 } from "./types.js";
-import { buildUsageSummary, priceWindowCovers } from "./usage.js";
+import { buildUsageSummary, parseWindowMinute, priceWeekBitmap, priceWindowCovers, scheduleCoversEvent } from "./usage.js";
 
 const baseSchemaPath = fileURLToPath(
   new URL("../schema/roadmap.schema.json", import.meta.url),
@@ -182,8 +182,140 @@ function priceWindowDiagnostics(prices: UsagePrice[]): Diagnostic[] {
       });
     }
   }
+  return diagnostics;
+}
 
-  // 同一 (provider, modelId) 的有效期不得重叠（半开区间，相邻不构成重叠）
+/** schedule 结构诊断（契约 §7.2）：时区无效、days 为空数组、start ≥ end */
+function scheduleDiagnostics(prices: UsagePrice[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  for (const price of prices) {
+    const schedule = price.schedule;
+    if (schedule === undefined) continue;
+    const path = `/prices/${price.id}/schedule`;
+    try {
+      // 无效时区（如 "Not/AZone"）在构造时抛 RangeError
+      new Intl.DateTimeFormat("en-US", { timeZone: schedule.timezone });
+    } catch {
+      diagnostics.push({
+        code: "USAGE_INVALID_SCHEDULE",
+        path,
+        message: `价格 ${price.id} 的 schedule.timezone「${schedule.timezone}」不是有效的时区`,
+      });
+      continue;
+    }
+    for (const window of schedule.windows) {
+      if (window.days.length === 0) {
+        diagnostics.push({
+          code: "USAGE_INVALID_SCHEDULE",
+          path,
+          message: `价格 ${price.id} 的 schedule 窗口 days 为空数组（至少指定一个星期）`,
+        });
+        break;
+      }
+      const start = parseWindowMinute(window.start);
+      const end = parseWindowMinute(window.end);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start >= end) {
+        diagnostics.push({
+          code: "USAGE_INVALID_SCHEDULE",
+          path,
+          message: `价格 ${price.id} 的 schedule 窗口 ${window.days.join(",")} ${window.start}-${window.end} 非法：start 必须早于 end（HH:MM，24 小时制，不支持跨午夜）`,
+        });
+        break;
+      }
+    }
+  }
+  return diagnostics;
+}
+
+/** supersededBy 诊断（契约 §7.2）：目标必须存在、不得自引用、不得成环、目标须同 (provider, modelId) */
+function supersededByDiagnostics(prices: UsagePrice[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const priceById = new Map(prices.map((price) => [price.id, price]));
+  for (const price of prices) {
+    const target = price.supersededBy;
+    if (target === undefined) continue;
+    const path = `/prices/${price.id}/supersededBy`;
+    if (target === price.id) {
+      diagnostics.push({
+        code: "USAGE_SUPERSEDE_SELF",
+        path,
+        message: `价格 ${price.id} 的 supersededBy 引用了自身`,
+      });
+      continue;
+    }
+    const successor = priceById.get(target);
+    if (successor === undefined) {
+      diagnostics.push({
+        code: "USAGE_UNKNOWN_SUPERSEDE",
+        path,
+        message: `价格 ${price.id} 的 supersededBy 指向不存在的价格 ${target}`,
+      });
+      continue;
+    }
+    if (successor.provider !== price.provider || successor.modelId !== price.modelId) {
+      diagnostics.push({
+        code: "USAGE_SUPERSEDE_MODEL_MISMATCH",
+        path,
+        message: `价格 ${price.id} 的 supersededBy 目标 ${target} 的 (provider, modelId)（${successor.provider}, ${successor.modelId}）与来源（${price.provider}, ${price.modelId}）不一致`,
+      });
+      continue;
+    }
+    if (supersedeChainHasCycle(price, priceById)) {
+      diagnostics.push({
+        code: "USAGE_SUPERSEDE_CYCLE",
+        path,
+        message: `价格 ${price.id} 的 supersededBy 链上存在环`,
+      });
+    }
+  }
+  return diagnostics;
+}
+
+/** 沿 supersededBy 链行走，判断 start 自身是否处于环上（每节点至多一条出边的功能性图） */
+function supersedeChainHasCycle(start: UsagePrice, priceById: Map<string, UsagePrice>): boolean {
+  const seen = new Set<string>([start.id]);
+  let current = start.supersededBy === undefined ? undefined : priceById.get(start.supersededBy);
+  while (current !== undefined) {
+    if (current.id === start.id) return true;
+    if (seen.has(current.id)) return false; // 进入了不含 start 的环
+    seen.add(current.id);
+    current = current.supersededBy === undefined ? undefined : priceById.get(current.supersededBy);
+  }
+  return false;
+}
+
+/** price 的绝对有效期右端（null/缺失 = 开放区间） */
+function priceWindowEnd(price: UsagePrice): number {
+  if (price.effectiveTo === undefined || price.effectiveTo === null) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Date.parse(price.effectiveTo);
+}
+
+/** 绝对有效期是否重叠（半开区间；非法时间解析为 NaN 时自然不重叠） */
+function absoluteWindowsOverlap(left: UsagePrice, right: UsagePrice): boolean {
+  return (
+    Math.max(Date.parse(left.effectiveFrom), Date.parse(right.effectiveFrom)) <
+    Math.min(priceWindowEnd(left), priceWindowEnd(right))
+  );
+}
+
+/** 两个一周分钟位图是否有交集（遍历较小集合并查较大集合） */
+function weekBitmapsIntersect(left: Set<number>, right: Set<number>): boolean {
+  const [smaller, larger] = left.size <= right.size ? [left, right] : [right, left];
+  for (const minute of smaller) {
+    if (larger.has(minute)) return true;
+  }
+  return false;
+}
+
+/**
+ * 同 (provider, modelId) 价格冲突判定（位图法，契约 §5 规则 2）：
+ * 绝对有效期重叠 且 一周时段位图有交集 且 双方均未被 supersededBy 取代。
+ * 互补窗口（高峰正向 + 空闲 negate 同 windows）位图无交集，不构成重叠。
+ */
+function priceOverlapDiagnostics(prices: UsagePrice[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
   const groups = new Map<string, UsagePrice[]>();
   for (const price of prices) {
     const key = `${price.provider}\u0000${price.modelId}`;
@@ -192,27 +324,19 @@ function priceWindowDiagnostics(prices: UsagePrice[]): Diagnostic[] {
     groups.set(key, group);
   }
   for (const group of groups.values()) {
-    const sorted = [...group].sort(
-      (left, right) => Date.parse(left.effectiveFrom) - Date.parse(right.effectiveFrom),
-    );
-    let furthest: UsagePrice | undefined;
-    let furthestEnd = Number.NEGATIVE_INFINITY;
-    for (const price of sorted) {
-      const start = Date.parse(price.effectiveFrom);
-      const end =
-        price.effectiveTo === undefined || price.effectiveTo === null
-          ? Number.POSITIVE_INFINITY
-          : Date.parse(price.effectiveTo);
-      if (furthest && start < furthestEnd) {
+    for (let index = 0; index < group.length; index += 1) {
+      for (let other = index + 1; other < group.length; other += 1) {
+        const left = group[index]!;
+        const right = group[other]!;
+        // 被 supersededBy 取代的价格退出重叠判定（契约 §5）
+        if (left.supersededBy !== undefined || right.supersededBy !== undefined) continue;
+        if (!absoluteWindowsOverlap(left, right)) continue;
+        if (!weekBitmapsIntersect(priceWeekBitmap(left), priceWeekBitmap(right))) continue;
         diagnostics.push({
           code: "USAGE_OVERLAPPING_PRICE",
-          path: `/prices/${price.id}`,
-          message: `价格 ${price.id} 与 ${furthest.id} 的有效期重叠（同一 provider/modelId 不得重叠）`,
+          path: `/prices/${right.id}`,
+          message: `价格 ${right.id} 与 ${left.id} 的有效期与周期时段均重叠（同一 provider/modelId 不得重叠）`,
         });
-      }
-      if (end > furthestEnd) {
-        furthest = price;
-        furthestEnd = end;
       }
     }
   }
@@ -249,11 +373,14 @@ function priceReferenceDiagnostics(
         message: `事件 ${event.id} 引用价格 ${price.id}，但其 (provider, modelId) 与事件的 (${event.provider}, ${event.modelId}) 不一致`,
       });
     }
-    if (!priceWindowCovers(price, event.occurredAt)) {
+    if (
+      !priceWindowCovers(price, event.occurredAt) ||
+      !scheduleCoversEvent(price, event.occurredAt)
+    ) {
       diagnostics.push({
         code: "USAGE_PRICE_NOT_EFFECTIVE",
         path: reference.path,
-        message: `事件 ${event.id} 的发生时间 ${event.occurredAt} 不在价格 ${price.id} 的有效期内`,
+        message: `事件 ${event.id} 的发生时间 ${event.occurredAt} 不在价格 ${price.id} 的有效期内（含周期时段约束）`,
       });
     }
   }
@@ -271,7 +398,7 @@ function priceReferenceDiagnostics(
   return diagnostics;
 }
 
-/** 用量账本语义校验（契约 §7.2 全部 13 个诊断码） */
+/** 用量账本语义校验（契约 §7.2 全部 18 个诊断码） */
 export function validateUsageSemantics(ledger: UsageLedger, roadmap: Roadmap): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   const events = ledger.events;
@@ -288,6 +415,9 @@ export function validateUsageSemantics(ledger: UsageLedger, roadmap: Roadmap): D
   diagnostics.push(...duplicateIdDiagnostics(events, "USAGE_DUPLICATE_EVENT_ID", "/events"));
   diagnostics.push(...duplicateIdDiagnostics(prices, "USAGE_DUPLICATE_PRICE_ID", "/prices"));
   diagnostics.push(...priceWindowDiagnostics(prices));
+  diagnostics.push(...scheduleDiagnostics(prices));
+  diagnostics.push(...supersededByDiagnostics(prices));
+  diagnostics.push(...priceOverlapDiagnostics(prices));
 
   const taskIds = new Set(roadmap.requirements.map((item) => item.id));
   const priceById = new Map(prices.map((price) => [price.id, price]));

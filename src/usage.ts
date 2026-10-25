@@ -7,8 +7,10 @@ import type {
   UsageEventView,
   UsageLedger,
   UsagePrice,
+  UsageSchedule,
   UsageSummary,
   UsageTokenTotals,
+  UsageWeekday,
 } from "./types.js";
 
 /** 估算假设标识（契约《成本核算规则》§3.3） */
@@ -70,7 +72,118 @@ export function priceWindowCovers(price: UsagePrice, occurredAt: string): boolea
   return !Number.isNaN(to) && at < to;
 }
 
-/** 四要素一致：provider、modelId 一致且 occurredAt 落在有效期内（契约 §5 规则 5） */
+/** 一周分钟数：位图索引空间 0..10079，周一 00:00 = 0（契约 §5 schedule） */
+const WEEK_MINUTES = 7 * 24 * 60;
+
+const WEEKDAY_INDEX: Record<UsageWeekday, number> = {
+  mon: 0,
+  tue: 1,
+  wed: 2,
+  thu: 3,
+  fri: 4,
+  sat: 5,
+  sun: 6,
+};
+
+/** 无 schedule 的价格全时段生效：共享的全集位图（只读使用，调用方不得修改） */
+const FULL_WEEK_MINUTES: Set<number> = new Set(
+  Array.from({ length: WEEK_MINUTES }, (_, minute) => minute),
+);
+
+/** "HH:MM" → 当日分钟数（00:00–23:59）；非法格式返回 NaN */
+export function parseWindowMinute(value: string): number {
+  const matched = /^([01][0-9]|2[0-3]):([0-5][0-9])$/u.exec(value);
+  if (matched === null) return Number.NaN;
+  return Number(matched[1]) * 60 + Number(matched[2]);
+}
+
+const weekMinuteFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function weekMinuteFormatter(timezone: string): Intl.DateTimeFormat | undefined {
+  const cached = weekMinuteFormatters.get(timezone);
+  if (cached !== undefined) return cached;
+  try {
+    // hourCycle "h23" 保证小时为 00–23 两位；hour12:false 在某些 Node 版本会产出 "24"
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    weekMinuteFormatters.set(timezone, formatter);
+    return formatter;
+  } catch {
+    // 无效时区由校验层报 USAGE_INVALID_SCHEDULE；匹配层视为不命中
+    return undefined;
+  }
+}
+
+/** occurredAt 按 timezone 换算的一周分钟索引（周一 00:00 = 0）；不可解析返回 NaN */
+function localWeekMinute(occurredAt: string, timezone: string): number {
+  const at = Date.parse(occurredAt);
+  if (Number.isNaN(at)) return Number.NaN;
+  const formatter = weekMinuteFormatter(timezone);
+  if (formatter === undefined) return Number.NaN;
+  const parts = formatter.formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  const weekday = WEEKDAY_INDEX[part("weekday").toLowerCase() as UsageWeekday];
+  const hour = Number(part("hour"));
+  const minute = Number(part("minute"));
+  if (weekday === undefined || !Number.isInteger(hour) || !Number.isInteger(minute)) {
+    return Number.NaN;
+  }
+  return weekday * 1440 + hour * 60 + minute;
+}
+
+/**
+ * schedule → 一周分钟位图（0..10079，周一 00:00 起；左闭右开分钟区间）。
+ * negate=true 取补集；无 schedule = 全集。非法窗口（start ≥ end 或格式非法）跳过——
+ * 结构合法性由校验层的 USAGE_INVALID_SCHEDULE 拦截，此处仅防御。
+ */
+export function scheduleWeekMinutes(schedule: UsageSchedule | undefined): Set<number> {
+  if (schedule === undefined) return FULL_WEEK_MINUTES;
+  const minutes = new Set<number>();
+  for (const window of schedule.windows) {
+    const start = parseWindowMinute(window.start);
+    const end = parseWindowMinute(window.end);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start >= end) continue;
+    for (const day of window.days) {
+      const dayOffset = WEEKDAY_INDEX[day] * 1440;
+      for (let minute = start; minute < end; minute += 1) minutes.add(dayOffset + minute);
+    }
+  }
+  if (schedule.negate === true) {
+    const complement = new Set<number>();
+    for (let minute = 0; minute < WEEK_MINUTES; minute += 1) {
+      if (!minutes.has(minute)) complement.add(minute);
+    }
+    return complement;
+  }
+  return minutes;
+}
+
+const weekBitmapCache = new WeakMap<UsagePrice, Set<number>>();
+
+/** price 的一周分钟位图（按 price 对象身份缓存；无 schedule = 全集） */
+export function priceWeekBitmap(price: UsagePrice): Set<number> {
+  const cached = weekBitmapCache.get(price);
+  if (cached !== undefined) return cached;
+  const bitmap = scheduleWeekMinutes(price.schedule);
+  weekBitmapCache.set(price, bitmap);
+  return bitmap;
+}
+
+/** price 的周期时段是否覆盖 occurredAt（无 schedule = 全时段命中；时区无效或时间不可解析 = 不命中） */
+export function scheduleCoversEvent(price: UsagePrice, occurredAt: string): boolean {
+  if (price.schedule === undefined) return true;
+  const minute = localWeekMinute(occurredAt, price.schedule.timezone);
+  if (Number.isNaN(minute)) return false;
+  return priceWeekBitmap(price).has(minute);
+}
+
+/** 四要素一致 + 周期时段命中（契约 §5 规则 5）：provider、modelId 一致、occurredAt 落在有效期内且命中 schedule 时段 */
 export function priceMatchesEvent(
   price: UsagePrice,
   event: Pick<UsageEvent, "provider" | "modelId" | "occurredAt">,
@@ -78,16 +191,19 @@ export function priceMatchesEvent(
   return (
     price.provider === event.provider &&
     price.modelId === event.modelId &&
-    priceWindowCovers(price, event.occurredAt)
+    priceWindowCovers(price, event.occurredAt) &&
+    scheduleCoversEvent(price, event.occurredAt)
   );
 }
 
-/** 按 (provider, modelId) 与发生时间自动匹配价格；多条命中取 effectiveFrom 最新者（重叠已被校验层拦截） */
+/** 按 (provider, modelId) 与发生时间自动匹配价格；被 supersededBy 取代的价格退出候选；多条命中取 effectiveFrom 最新者（重叠已被校验层拦截） */
 export function findEffectivePrice(
   event: Pick<UsageEvent, "provider" | "modelId" | "occurredAt">,
   prices: UsagePrice[],
 ): UsagePrice | undefined {
-  const candidates = prices.filter((price) => priceMatchesEvent(price, event));
+  const candidates = prices.filter(
+    (price) => price.supersededBy === undefined && priceMatchesEvent(price, event),
+  );
   if (candidates.length === 0) return undefined;
   return candidates.reduce((latest, price) =>
     Date.parse(price.effectiveFrom) > Date.parse(latest.effectiveFrom) ? price : latest,
@@ -179,7 +295,8 @@ export function resolveEventCost(
 
   let price: UsagePrice | undefined;
   if (event.priceId !== undefined) {
-    // 显式快照引用：不得静默按错配或过期价格估算。
+    // 显式快照引用：不得静默按错配、过期或时段不符的价格估算；
+    // superseded 不影响显式引用合法性（历史事件快照不受影响）。
     const referenced = prices.find((item) => item.id === event.priceId);
     price = referenced && priceMatchesEvent(referenced, event) ? referenced : undefined;
   } else {

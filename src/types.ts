@@ -104,6 +104,29 @@ export interface UsageEvent {
   note?: string;
 }
 
+/** 星期（周一 = mon … 周日 = sun） */
+export type UsageWeekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+/** 时段窗口：days 中每个本地星期的 start ≤ 本地时分 < end（左闭右开，不支持跨午夜） */
+export interface UsageScheduleWindow {
+  days: UsageWeekday[];
+  /** "HH:MM"，24 小时制（00:00–23:59） */
+  start: string;
+  end: string;
+}
+
+/**
+ * 价格周期时段（契约 §5）：price 生效还要求 occurredAt 按 timezone 换算出的
+ * 本地星期与时分命中 windows；negate=true 时取反（windows 之外生效）。
+ */
+export interface UsageSchedule {
+  /** IANA 时区名，如 "Asia/Shanghai" */
+  timezone: string;
+  /** 缺省 false；true 时 windows 之外生效（"空闲 = 高峰补集"） */
+  negate?: boolean;
+  windows: UsageScheduleWindow[];
+}
+
 export interface UsagePrice {
   id: string;
   provider: string;
@@ -117,6 +140,13 @@ export interface UsagePrice {
   effectiveFrom: string;
   /** null 或缺失表示至今有效（开放区间） */
   effectiveTo?: string | null;
+  /** 可选的周期时段限定；缺省表示全时段生效 */
+  schedule?: UsageSchedule;
+  /**
+   * 可选的取代声明（契约 §5）：该 price 退出自动匹配与重叠判定；
+   * 显式 priceId 引用仍然有效——取代只影响未来自动匹配，历史事件快照不受影响。
+   */
+  supersededBy?: string;
   basis: string;
   note?: string;
 }
@@ -221,6 +251,11 @@ export type DiagnosticCode =
   | "USAGE_TOKEN_SUBTOTAL_EXCEEDED"
   | "USAGE_INVALID_PRICE_WINDOW"
   | "USAGE_OVERLAPPING_PRICE"
+  | "USAGE_INVALID_SCHEDULE"
+  | "USAGE_UNKNOWN_SUPERSEDE"
+  | "USAGE_SUPERSEDE_SELF"
+  | "USAGE_SUPERSEDE_CYCLE"
+  | "USAGE_SUPERSEDE_MODEL_MISMATCH"
   | "USAGE_PROJECT_MISMATCH";
 
 export interface Diagnostic {
