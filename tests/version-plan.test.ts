@@ -153,6 +153,7 @@ describe("版本聚合", () => {
     [["done", "cancelled"], "done"], // T2 cancelled 不参与聚合
     [["done", "done"], "done"], // T2 全部完成
     [["in_progress"], "in_progress"], // T3 有在办
+    [["in_progress", "blocked"], "in_progress"], // T3 在办优先于阻塞（保留原有用例，防将来改动回退覆盖）
     [["review"], "in_progress"], // T4 有待验收
     [["review", "done"], "in_progress"], // T5 待验收 + 已完成
     [["done", "in_progress"], "in_progress"], // T5 在办 + 已完成
