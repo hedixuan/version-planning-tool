@@ -146,14 +146,27 @@ describe("语义校验", () => {
 });
 
 describe("版本聚合", () => {
+  // 真值表（P3-24）：逐行覆盖状态语义，含「部分完成 + 其余 backlog + 零在办」等混合态。
+  // T6/T7/T8/T9/T14 为 P3-24 相对旧规则的行为变化点。
   it.each([
-    [["cancelled"], "cancelled"],
-    [["done", "cancelled"], "done"],
-    [["review", "done"], "in_progress"],
-    [["in_progress", "blocked"], "in_progress"],
-    [["ready", "blocked"], "ready"],
-    [["blocked", "blocked"], "blocked"],
-    [["backlog", "blocked"], "backlog"],
+    [["cancelled"], "cancelled"], // T1 无 active
+    [["done", "cancelled"], "done"], // T2 cancelled 不参与聚合
+    [["done", "done"], "done"], // T2 全部完成
+    [["in_progress"], "in_progress"], // T3 有在办
+    [["in_progress", "blocked"], "in_progress"], // T3 在办优先于阻塞（保留原有用例，防将来改动回退覆盖）
+    [["review"], "in_progress"], // T4 有待验收
+    [["review", "done"], "in_progress"], // T5 待验收 + 已完成
+    [["done", "in_progress"], "in_progress"], // T5 在办 + 已完成
+    [["done", "backlog"], "in_progress"], // T6 核心修复：已启动未收尾，不得退回 backlog
+    [["done", "ready"], "in_progress"], // T7 有完成项即已启动，不得显示为就绪待启动
+    [["done", "blocked"], "in_progress"], // T8 有完成项且有阻塞，版本仍在推进
+    [["done", "ready", "backlog"], "in_progress"], // T9 混合态
+    [["ready"], "ready"], // T10 全部就绪
+    [["ready", "backlog"], "ready"], // T11 有就绪项
+    [["ready", "blocked"], "ready"], // T12 就绪优先于阻塞
+    [["blocked", "blocked"], "blocked"], // T13 全部受阻
+    [["blocked", "backlog"], "blocked"], // T14 受阻且未启动，不得显示为从未开始
+    [["backlog", "backlog"], "backlog"], // T15 从未启动
   ] as [Status[], Status][])("%j 聚合为 %s", (statuses, expected) => {
     expect(aggregateReleaseStatus(statuses.map((item, index) => requirement(`${index}`, item)))).toBe(
       expected,
@@ -163,6 +176,22 @@ describe("版本聚合", () => {
   it("报告版本聚合状态不一致", () => {
     const data = roadmap([requirement("a", "done")]);
     expect(validateSemantics(data)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "RELEASE_STATUS_MISMATCH" }),
+      ]),
+    );
+  });
+
+  it("混合态（部分完成 + 其余 backlog）按新规则校验：写 in_progress 通过、写 backlog 报错", () => {
+    const ok = roadmap([requirement("a", "done"), requirement("b", "backlog")]);
+    ok.releases[0]!.status = "in_progress";
+    expect(
+      validateSemantics(ok).filter((item) => item.code === "RELEASE_STATUS_MISMATCH"),
+    ).toHaveLength(0);
+
+    const bad = roadmap([requirement("a", "done"), requirement("b", "backlog")]);
+    bad.releases[0]!.status = "backlog";
+    expect(validateSemantics(bad)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "RELEASE_STATUS_MISMATCH" }),
       ]),

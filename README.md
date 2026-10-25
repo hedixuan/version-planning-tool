@@ -73,6 +73,33 @@ pnpm link --global
 
 校验同时检查基础 Schema、可选扩展 Schema、重复版本/需求 ID、未知版本、断裂依赖、循环依赖和版本聚合状态。
 
+## 版本状态规则（release.status）
+
+版本状态是**派生字段**：由该版本下全部需求的状态聚合计算，`validate` 会严格比对数据文件里写入的值与推导结果，不一致报 `RELEASE_STATUS_MISMATCH`。因此 `release.status` 必须写入推导结果，不能按主观判断填写。
+
+`cancelled` 的需求不参与聚合（相当于已退出）。
+
+判定顺序（自上而下，命中即返回）：
+
+| # | 条件 | 结果 |
+|---|---|---|
+| 1 | 无 active 需求 | `cancelled` |
+| 2 | active 全部 `done` | `done` |
+| 3 | 存在 `in_progress` 或 `review` | `in_progress` |
+| 4 | **存在 `done`（部分完成、未全部完成）** | `in_progress` |
+| 5 | 存在 `ready` | `ready` |
+| 6 | active 全部 `blocked` | `blocked` |
+| 7 | **存在 `blocked`（其余为 `backlog`）** | `blocked` |
+| 8 | 其余（全部 `backlog`） | `backlog` |
+
+语义约定：
+
+- `backlog` 专指**从未启动**——没有需求处于 `done`，也没有就绪、在办或阻塞项。
+- `in_progress` 覆盖**已启动、未收尾**，其中包括「部分完成 + 其余 `backlog` + 零在办」这类混合态（第 4 步）。判据是是否存在 `done`，而不要求当前仍有在办任务。这一档曾因规则缺失被误判为 `backlog`，使已完成过半的版本显示成「未开始」。
+- `blocked` 表示**推进受阻**；存在阻塞且其余尚未开始时同样判 `blocked`（第 7 步），不再退回 `backlog`。
+
+第 4 步与第 7 步是 P3-24 相对旧规则新增的行为，逐行回归用例见 `tests/version-plan.test.ts` §「版本聚合」的真值表。
+
 ## 模型用量账本（可选）
 
 工具可在只读前提下展示模型用量与成本：每次模型调用登记为一个事件，与需求池任务关联，携带 Token 明细、角色、来源与费用依据。账本是独立 JSON 文件，通过配置启用：
