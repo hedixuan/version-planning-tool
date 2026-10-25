@@ -110,8 +110,38 @@
         "reasoningPricePerUnit": { "type": "number", "minimum": 0 },
         "effectiveFrom": { "$ref": "#/$defs/dateTime" },
         "effectiveTo": { "type": ["string", "null"], "format": "date-time" },
+        "schedule": { "$ref": "#/$defs/schedule" },
+        "supersededBy": { "$ref": "#/$defs/id" },
         "basis": { "type": "string", "minLength": 1, "maxLength": 500 },
         "note": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timezone", "windows"],
+      "properties": {
+        "timezone": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "negate": { "type": "boolean", "default": false },
+        "windows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["days", "start", "end"],
+            "properties": {
+              "days": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }
+              },
+              "start": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+              "end": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+            }
+          }
+        }
       }
     }
   }
