@@ -45,8 +45,14 @@ export function aggregateReleaseStatus(requirements: Requirement[]): Status {
   if (active.some((item) => item.status === "in_progress" || item.status === "review")) {
     return "in_progress";
   }
+  // 已有需求完成但未全部完成：版本已启动且仍在推进，不得退回 backlog / ready。
+  // （P3-24：修正「部分完成 + 其余 backlog + 零在办」被误判为从未开始）
+  if (active.some((item) => item.status === "done")) return "in_progress";
   if (active.some((item) => item.status === "ready")) return "ready";
   if (active.every((item) => item.status === "blocked")) return "blocked";
+  // 存在阻塞且其余尚未开始：推进受阻，不得显示为从未开始。
+  // （P3-24：修正「blocked + backlog」被误判为 backlog）
+  if (active.some((item) => item.status === "blocked")) return "blocked";
   return "backlog";
 }
 
